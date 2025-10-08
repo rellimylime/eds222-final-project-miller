@@ -15,38 +15,38 @@ Why it is useful: shows end-to-end use of a spatial econometric model on real en
 
 ## Repository structure
 ```
-prodes-sem/
+eds222-final-project-miller
+├─ 1_explore_data.R        # minimal data prep + OLS + SEM
 ├─ data/
-│  ├─ 00_raw/                # downloads live here (not tracked by git)
-│  ├─ 01_intermediate/       # slimmed tables, weights, cached joins
-│  └─ 02_output/             # model outputs, tables for the blog
-├─ figs/                     # exported figures
-├─ notebooks/                # optional EDA notebooks
-├─ src/
-│  ├─ R/                     # R scripts
-│  │  └─ 01_prepare.R        # minimal data prep + OLS + SEM
-│  └─ py/                    # Python scripts (optional)
-│     └─ 01_prepare.py       # minimal data prep + OLS + SEM
+│  └─ prodes_amazonia_nb.gpkg/            
+├─ docs/
+├─ figs/
+├─ blog/
+|  └─ blog.qmd
+├─ R
+|  └─ 01_prepare.R               
+├─ output
+├─ eds222-final-project-miller.Rproj
 ├─ .gitignore
 └─ README.md
 ```
 
 ## Data access
 
-You will download raw data yourself and place it in data/00_raw/. Large files are not tracked.
+You will download raw data yourself and place it in data/. Large files are not tracked.
 
 Required
 
-- PRODES Amazônia, complete vector GeoPackage (about 860 MB). Download and unzip to data/00_raw/prodes_amazonia_nb.gpkg.
+- PRODES Amazônia, complete vector GeoPackage (about 860 MB). Download and unzip to data/prodes_amazonia_nb.gpkg.
 Source: https://terrabrasilis.dpi.inpe.br/en/download-files
 
 - Direct path example: https://terrabrasilis.dpi.inpe.br/download/dataset/amz-prodes/vector/prodes_amazonia_nb.gpkg.zip
 
-- Brazilian municipalities (IBGE, 2020 or similar). Save the shapefile or GeoPackage in data/00_raw/.
+- Brazilian municipalities (IBGE, 2020 or similar). Save the shapefile or GeoPackage in data/.
 Source: https://www.ibge.gov.br/en
  (Geosciences, Municipal Mesh) or the geobr R package.
 
-- Indigenous and Community Lands (LandMark). Save the Brazil Indigenous territories layer to data/00_raw/.
+- Indigenous and Community Lands (LandMark). Save the Brazil Indigenous territories layer to data/.
 Source: https://landmarkmap.org
 
 Optional
@@ -70,7 +70,7 @@ install.packages(c("sf","terra","dplyr","readr","stringr","lwgeom",
 
 Run the minimal pipeline:
 ```
-source("src/R/01_prepare.R")
+source("R/01_prepare.R")
 ```
 
 ## Outputs:
