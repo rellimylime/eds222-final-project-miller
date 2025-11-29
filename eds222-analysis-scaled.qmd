@@ -44,21 +44,20 @@ library(pscl)
 library(yaml)
 library(patchwork)
 
-set.seed(42)
-
 # Load configuration
 config <- read_yaml(here("config.yml"))
 
-CRS_M <- config$project$crs  # Denmark ETRS89 / UTM zone 32N
+set.seed(config$seed)
+
+CRS_M <- config$crs  # Denmark ETRS89 / UTM zone 32N
 
 # Denmark bounding box (WGS84)
-bbox_config <- config$project$denmark_bbox
 dk_bbox_wgs84 <- st_bbox(c(
-  xmin = bbox_config$xmin,
-  ymin = bbox_config$ymin,
-  xmax = bbox_config$xmax,
-  ymax = bbox_config$ymax
-), crs = bbox_config$crs)
+  xmin = config$bbox_xmin,
+  ymin = config$bbox_ymin,
+  xmax = config$bbox_xmax,
+  ymax = config$bbox_ymax
+), crs = config$bbox_crs)
 
 # Transform to projected CRS
 dk_bbox_proj <- st_transform(st_as_sfc(dk_bbox_wgs84), CRS_M) %>%
@@ -66,7 +65,7 @@ dk_bbox_proj <- st_transform(st_as_sfc(dk_bbox_wgs84), CRS_M) %>%
 
 cat("Setup complete!\n")
 cat("CRS:", CRS_M, "(Denmark ETRS89 / UTM zone 32N)\n")
-cat("Analysis period:", config$analysis$time_period, "\n")
+cat("Analysis period:", config$time_period, "\n")
 ```
 
 ---
@@ -83,7 +82,7 @@ Roadkill observations are point data with coordinates. We filter to Denmark and 
 cat("=== LOADING ROADKILL DATA ===\n")
 
 # Load CSV data
-road_kill_dk <- read_csv(here(config$data$raw$roadkill$path)) %>%
+road_kill_dk <- read_csv(here(config$roadkill_csv_path)) %>%
   filter(country == "Denmark",
          year >= 2017, year <= 2019) %>%
   drop_na(decimalLongitude, decimalLatitude) %>%
@@ -105,7 +104,7 @@ cat("  CRS:", st_crs(road_kill_dk)$epsg, "\n\n")
 
 cat("=== LOADING ROAD NETWORK (WITH CACHING) ===\n")
 
-roads_cache <- here(config$data$processed$roads_cached$path)
+roads_cache <- here(config$roads_cached_path)
 
 if (file.exists(roads_cache)) {
   cat("Loading roads from cache...\n")
@@ -114,7 +113,7 @@ if (file.exists(roads_cache)) {
   cat("Cache not found. Loading and processing roads (one-time setup)...\n")
 
   # Load shapefile
-  roads_raw <- st_read(here(config$data$raw$roads$path), quiet = TRUE) %>%
+  roads_raw <- st_read(here(config$roads_shp_path), quiet = TRUE) %>%
     st_transform(CRS_M) %>%
     st_crop(dk_bbox_proj)
 
@@ -134,7 +133,7 @@ cat("Roads loaded:", format(nrow(roads_raw), big.mark = ","), "segments\n\n")
 
 cat("=== LOADING TRAFFIC DATA (WITH CACHING) ===\n")
 
-traffic_cache <- here(config$data$processed$traffic_cached$path)
+traffic_cache <- here(config$traffic_cached_path)
 
 if (file.exists(traffic_cache)) {
   cat("Loading traffic data from cache...\n")
@@ -143,7 +142,7 @@ if (file.exists(traffic_cache)) {
   cat("Cache not found. Loading and processing traffic (one-time setup)...\n")
 
   # Load shapefile
-  traffic_raw <- st_read(here(config$data$raw$traffic$path), quiet = TRUE) %>%
+  traffic_raw <- st_read(here(config$traffic_shp_path), quiet = TRUE) %>%
     st_transform(CRS_M) %>%
     st_crop(dk_bbox_proj)
 
@@ -163,7 +162,7 @@ cat("Traffic points loaded:", format(nrow(traffic_raw), big.mark = ","), "\n\n")
 
 cat("=== LOADING LAND USE DATA (WITH CACHING) ===\n")
 
-landuse_cache <- here(config$data$processed$landuse_cached$path)
+landuse_cache <- here(config$landuse_cached_path)
 
 if (file.exists(landuse_cache)) {
   cat("Loading land use from cache...\n")
@@ -172,7 +171,7 @@ if (file.exists(landuse_cache)) {
   cat("Cache not found. Loading and processing land use (one-time setup)...\n")
 
   # Load shapefile
-  landuse_raw <- st_read(here(config$data$raw$landuse$path), quiet = TRUE) %>%
+  landuse_raw <- st_read(here(config$landuse_shp_path), quiet = TRUE) %>%
     st_transform(CRS_M) %>%
     st_crop(dk_bbox_proj)
 
@@ -211,9 +210,9 @@ cat("\n=== FILTERING TO CAR-ACCESSIBLE ROADS ===\n")
 
 # Extract car codes from config
 car_codes <- c(
-  config$data$raw$roads$car_accessible_codes$major,
-  config$data$raw$roads$car_accessible_codes$minor,
-  config$data$raw$roads$car_accessible_codes$links
+  config$road_car_codes_major,
+  config$road_car_codes_minor,
+  config$road_car_codes_links
 )
 
 # Filter and calculate road lengths
@@ -243,7 +242,7 @@ cat("  Mean segment length:", round(mean(car_roads$len_km), 2), "km\n\n")
 
 cat("=== MATCHING TRAFFIC TO ROADS ===\n")
 
-distances_cache_file <- here(config$data$processed$distances_cache$path)
+distances_cache_file <- here(config$distances_cache_path)
 
 if (file.exists(distances_cache_file)) {
   cat("Loading cached distances...\n")
@@ -283,7 +282,7 @@ cat("Distance matching complete.\n\n")
 #| label: apply-threshold
 
 # Apply configured threshold
-threshold_percentile <- config$analysis$traffic_matching$distance_threshold_percentile
+threshold_percentile <- config$distance_threshold_percentile
 dist_threshold <- quantile(as.numeric(distances), threshold_percentile)
 
 # Merge traffic data with roads
@@ -328,7 +327,7 @@ Results will characterize the traffic-roadkill relationship on Denmark's **monit
 
 cat("=== PROCESSING CORINE LAND COVER ===\n")
 
-corine_cache_file <- here(config$data$processed$corine_cached$path)
+corine_cache_file <- here(config$corine_cached_path)
 
 if (file.exists(corine_cache_file)) {
   cat("Loading cached CORINE Denmark (EPSG:25832)...\n")
@@ -337,7 +336,7 @@ if (file.exists(corine_cache_file)) {
   cat("Processing CORINE (one-time setup, ~2-5 minutes)...\n")
 
   # Load original CORINE
-  corine_raw <- rast(here(config$data$raw$corine$path))
+  corine_raw <- rast(here(config$corine_raster_path))
 
   cat("  Original CORINE CRS:", crs(corine_raw, describe = TRUE)$name, "\n")
 
@@ -375,7 +374,7 @@ cat("CORINE ready! Resolution:", res(corine_dk), "m\n")
 
 cat("=== EXTRACTING LAND COVER PROPORTIONS ===\n")
 
-landcover_cache_file <- here(config$data$processed$landcover_props$path)
+landcover_cache_file <- here(config$landcover_props_path)
 
 if (file.exists(landcover_cache_file)) {
   cat("Loading cached land cover proportions...\n")
@@ -384,7 +383,7 @@ if (file.exists(landcover_cache_file)) {
   cat("Extracting land cover (this will take 5-10 minutes)...\n")
 
   # Create 500m buffers around roads
-  buffer_dist <- config$analysis$road_buffer_distance
+  buffer_dist <- config$road_buffer_distance
   cat("  Creating", buffer_dist, "m buffers...\n")
   road_buffers <- roads_traf %>%
     st_buffer(buffer_dist)
@@ -434,7 +433,7 @@ cat("  Mean % Urban:", round(mean(roads_traf$pct_urban, na.rm = TRUE), 1), "\n")
 
 cat("=== AGGREGATING ROADKILL BY ROAD SEGMENT ===\n")
 
-roadkill_cache_file <- here(config$data$processed$roadkill_cache$path)
+roadkill_cache_file <- here(config$roadkill_cache_path)
 
 if (file.exists(roadkill_cache_file)) {
   cat("Loading cached roadkill aggregation...\n")
@@ -481,9 +480,9 @@ model_data <- roads_traf %>%
 
     # Road type classification
     road_type = case_when(
-      code %in% config$data$raw$roads$car_accessible_codes$major ~ "Major",
-      code %in% config$data$raw$roads$car_accessible_codes$minor ~ "Minor",
-      code %in% config$data$raw$roads$car_accessible_codes$links ~ "Links/Ramps",
+      code %in% config$road_car_codes_major ~ "Major",
+      code %in% config$road_car_codes_minor ~ "Minor",
+      code %in% config$road_car_codes_links ~ "Links/Ramps",
       TRUE ~ "Other"
     ),
 
@@ -621,7 +620,7 @@ Where:
 
 ```{r}
 cat("Model predictors:\n")
-for (pred in config$analysis$model$predictors) {
+for (pred in config$model_predictors) {
   cat("  -", pred, "\n")
 }
 ```
@@ -632,9 +631,9 @@ for (pred in config$analysis$model$predictors) {
 #| label: fit-model
 
 cat("\n=== FITTING HURDLE MODEL ===\n")
-cat("Distribution:", config$analysis$model$distribution, "\n")
-cat("Zero component:", config$analysis$model$zero_dist, "\n")
-cat("Offset:", config$analysis$model$offset, "\n\n")
+cat("Distribution:", config$model_distribution, "\n")
+cat("Zero component:", config$model_zero_dist, "\n")
+cat("Offset:", config$model_offset, "\n\n")
 
 # Note: Simplified model using available predictors
 # Add land cover variables if CORINE processing is enabled
@@ -643,8 +642,8 @@ hurdle_model <- hurdle(
                    log_AADT + road_type + speed_limit,
   data = model_data,
   offset = log(len_km),  # Controls for road length exposure
-  dist = config$analysis$model$distribution,
-  zero.dist = config$analysis$model$zero_dist
+  dist = config$model_distribution,
+  zero.dist = config$model_zero_dist
 )
 
 cat("Model fitted successfully!\n\n")
