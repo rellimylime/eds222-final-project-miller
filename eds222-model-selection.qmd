@@ -1,0 +1,469 @@
+---
+title: "EDS 222 Final Project: Roadkill Model Selection"
+subtitle: "Comparing Negative Binomial vs Hurdle Models"
+format: html
+---
+
+# 1. Setup & Load Data
+
+```{r setup, message=FALSE, warning=FALSE}
+options(repos = c(CRAN = "https://cran.rstudio.com/"))
+# Install packages if needed
+packages_needed <- c("tidyverse", "sf", "here", "patchwork", "MASS", "pscl", "AER", "dagitty", "ggdag")
+
+for (pkg in packages_needed) {
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg, dependencies = TRUE)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# Define CRS for Denmark (EPSG:25832)
+CRS_M <- 25832
+
+cat("All packages loaded successfully!\n")
+```
+
+```{r load-data}
+# Load roadkill data
+road_kill <- read_csv(here::here("data", "Global Roadkill data.csv"))
+
+# Filter to Denmark and convert to spatial points
+road_kill_dk <- road_kill %>% 
+  filter(country == "Denmark") %>% 
+  drop_na(decimalLongitude, decimalLatitude) %>%
+  st_as_sf(coords = c("decimalLongitude", "decimalLatitude"), crs = 4326) %>% 
+  st_transform(CRS_M)
+
+cat("Roadkill records for Denmark:", nrow(road_kill_dk), "\n")
+```
+
+# 2. Load Spatial Data
+
+```{r load-spatial}
+# Load roads
+roads_raw <- st_read(here("data", "OSM_dk_roads_shp", "gis_osm_roads_free_1.shp")) %>%
+  st_transform(CRS_M)
+
+# Load traffic data
+traffic_raw <- st_read(here("data", "ODN_dk_traffic_shp", "OPEN_DATA_NOEGLETAL_VIEWPoint.shp")) %>%
+  st_transform(CRS_M)
+
+cat("Total roads:", nrow(roads_raw), "\n")
+cat("Traffic points:", nrow(traffic_raw), "\n")
+```
+
+# 3. Prepare Road Network
+
+```{r prepare-roads}
+# Car road codes
+car_codes <- c(5111, 5112, 5113, 5114, 5115,  # Major roads
+               5121, 5122, 5123,              # Minor roads
+               5131, 5132, 5133, 5134, 5135,  # Links/ramps
+               5141)                          # Service
+
+# Filter and prepare roads
+car_roads <- roads_raw %>% 
+  filter(code %in% car_codes) %>% 
+  transmute(osm_id, fclass, code, maxspeed, oneway, bridge, tunnel, ref, geometry) %>% 
+  mutate(len_m = st_length(geometry),
+         len_km = as.numeric(len_m) / 1000)
+
+cat("Car roads filtered:", nrow(car_roads), "\n")
+```
+
+# 4. Match Traffic Data to Roads
+
+```{r match-traffic}
+# Select traffic variables
+traffic_trim <- traffic_raw %>% 
+  select(AAR, AADT, geometry)
+
+# Find nearest traffic point to each road segment
+idx <- st_nearest_feature(car_roads, traffic_trim)
+d <- st_distance(car_roads, traffic_trim[idx, ], by_element = TRUE)
+
+roads_traf20 <- car_roads %>% 
+  mutate(nn_dist_m = as.numeric(d)) %>%
+  bind_cols(traffic_trim[idx, ] %>% st_drop_geometry()) %>% 
+  mutate(AADT = if_else(nn_dist_m <= 20, AADT, NA_real_))
+
+cat("AADT coverage (within 20m):", round(mean(!is.na(roads_traf20$AADT)), 3), "\n")
+cat("AADT range:", min(roads_traf20$AADT, na.rm = TRUE), "-", 
+    max(roads_traf20$AADT, na.rm = TRUE), "\n")
+```
+
+# 5. Create Model Dataset
+
+```{r create-model-data}
+# Aggregate roadkill by road segment
+roadkill_by_segment <- road_kill_dk %>%
+  st_join(roads_traf20, join = st_nearest_feature) %>%
+  group_by(osm_id) %>%
+  summarise(roadkill_count = n(), .groups = "drop") %>%
+  st_drop_geometry()
+
+# Create full model dataset
+model_data <- roads_traf20 %>%
+  left_join(roadkill_by_segment, by = "osm_id") %>%
+  replace_na(list(roadkill_count = 0)) %>%
+  mutate(roadkill_per_km = roadkill_count / len_km) %>%
+  st_drop_geometry() %>%
+  select(osm_id, roadkill_count, roadkill_per_km, len_km, 
+         fclass, code, maxspeed, AADT, nn_dist_m) %>%
+  filter(AADT > 0)
+
+cat("\n=== MODEL DATASET SUMMARY ===\n")
+cat("Total segments:", nrow(model_data), "\n")
+cat("Segments with roadkill:", sum(model_data$roadkill_count > 0), "\n")
+cat("Proportion with roadkill:", round(mean(model_data$roadkill_count > 0), 3), "\n")
+```
+
+# 6. Summary Statistics
+
+```{r summary-stats}
+cat("\n=== ROADKILL COUNT DISTRIBUTION ===\n")
+print(summary(model_data$roadkill_count))
+cat("Variance:", round(var(model_data$roadkill_count), 3), "\n")
+cat("Mean:", round(mean(model_data$roadkill_count), 3), "\n")
+cat("Variance/Mean ratio:", round(var(model_data$roadkill_count) / mean(model_data$roadkill_count), 2), "\n")
+cat("(Ratio > 1 indicates overdispersion)\n")
+
+cat("\n=== AADT DISTRIBUTION ===\n")
+print(summary(model_data$AADT))
+```
+
+# 7. Exploratory Visualizations
+
+```{r explore-plots, fig.width=14, fig.height=10}
+# Distribution of roadkill counts
+p1 <- ggplot(model_data, aes(x = roadkill_count)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Roadkill Counts",
+       x = "Number of Roadkill Events", y = "Frequency") +
+  theme_minimal() + theme(plot.title = element_text(face = "bold"))
+
+# Zero vs Non-zero
+p2 <- tibble(category = c("No Roadkill", "Roadkill Observed"),
+             count = c(sum(model_data$roadkill_count == 0), 
+                      sum(model_data$roadkill_count > 0))) %>%
+  ggplot(aes(x = category, y = count, fill = category)) +
+  geom_col(color = "black", alpha = 0.7) +
+  geom_text(aes(label = paste0(count, "\n(", 
+                               round(count/nrow(model_data)*100, 1), "%)")),
+            vjust = -0.5, fontface = "bold") +
+  labs(title = "Zero Inflation",
+       x = "", y = "Number of Segments") +
+  scale_fill_manual(values = c("steelblue", "coral")) +
+  theme_minimal() + theme(legend.position = "none",
+                         plot.title = element_text(face = "bold"))
+
+# Roadkill vs AADT
+p3 <- ggplot(model_data, aes(x = AADT, y = roadkill_count)) +
+  geom_point(alpha = 0.4, size = 2) +
+  scale_x_log10() +
+  geom_smooth(method = "loess", se = TRUE, color = "red", alpha = 0.2) +
+  labs(title = "Roadkill vs Traffic Volume",
+       x = "AADT (log scale)", y = "Roadkill Count") +
+  theme_minimal() + theme(plot.title = element_text(face = "bold"))
+
+# Roadkill density vs AADT
+p4 <- ggplot(model_data, aes(x = AADT, y = roadkill_per_km)) +
+  geom_point(alpha = 0.4, size = 2) +
+  scale_x_log10() +
+  geom_smooth(method = "loess", se = TRUE, color = "red", alpha = 0.2) +
+  labs(title = "Roadkill Density vs Traffic",
+       x = "AADT (log scale)", y = "Roadkill per km") +
+  theme_minimal() + theme(plot.title = element_text(face = "bold"))
+
+(p1 + p2) / (p3 + p4)
+```
+
+# 8. Test for Overdispersion & Zero-Inflation
+
+```{r test-assumptions}
+# Prepare data for modeling
+model_data_clean <- model_data %>%
+  filter(!is.na(AADT), !is.na(roadkill_count)) %>%
+  mutate(log_AADT = log(AADT),
+         log_len_km = log(len_km + 0.1))
+
+# Fit Poisson to test for overdispersion
+poisson_test <- glm(roadkill_count ~ log_AADT + log_len_km, 
+                    family = poisson(link = "log"), 
+                    data = model_data_clean)
+
+cat("=== OVERDISPERSION TEST (Poisson) ===\n")
+print(dispersiontest(poisson_test))
+
+cat("\n=== ZERO-INFLATION ASSESSMENT ===\n")
+obs_zeros <- sum(model_data_clean$roadkill_count == 0)
+exp_zeros <- sum(dpois(0, fitted(poisson_test)))
+ratio <- obs_zeros / exp_zeros
+
+cat("Observed zeros:", obs_zeros, "\n")
+cat("Expected zeros (Poisson):", round(exp_zeros), "\n")
+cat("Ratio (Obs/Exp):", round(ratio, 2), "\n")
+cat("Interpretation: ", ifelse(ratio > 1.5, "STRONG zero-inflation", "Moderate zero-inflation"), "\n")
+```
+
+# 9. Fit Both Models
+
+```{r fit-models}
+# OPTION A: NEGATIVE BINOMIAL MODEL
+cat("=== FITTING NEGATIVE BINOMIAL MODEL ===\n")
+nb_model <- glm.nb(roadkill_count ~ log_AADT + log_len_km,
+                   data = model_data_clean)
+print(summary(nb_model))
+cat("\nNegative Binomial AIC:", round(AIC(nb_model), 1), "\n")
+
+# OPTION B: HURDLE MODEL
+cat("\n=== FITTING HURDLE MODEL ===\n")
+hurdle_model <- hurdle(roadkill_count ~ log_AADT + log_len_km | log_AADT + log_len_km,
+                       data = model_data_clean,
+                       dist = "negbin",
+                       zero.dist = "binomial")
+print(summary(hurdle_model))
+cat("\nHurdle Model AIC:", round(AIC(hurdle_model), 1), "\n")
+```
+
+# 10. Model Comparison & Recommendation
+
+```{r model-recommendation}
+aic_nb <- AIC(nb_model)
+aic_hurdle <- AIC(hurdle_model)
+aic_diff <- abs(aic_nb - aic_hurdle)
+winner <- if_else(aic_hurdle < aic_nb, "HURDLE", "NEGATIVE BINOMIAL")
+
+cat("\n╔══════════════════════════════════════════════════════════╗\n")
+cat("║           MODEL COMPARISON & RECOMMENDATION              ║\n")
+cat("╚══════════════════════════════════════════════════════════╝\n\n")
+
+cat("Negative Binomial AIC:", round(aic_nb, 1), "\n")
+cat("Hurdle Model AIC:     ", round(aic_hurdle, 1), "\n")
+cat("Difference:           ", round(aic_diff, 1), "\n")
+cat("(Difference > 10 = strong preference)\n\n")
+
+cat(">>> RECOMMENDED MODEL: ", winner, " <<<\n\n")
+
+if(winner == "HURDLE") {
+  cat("Reasoning:\n")
+  cat("• Strong zero-inflation in data (", round(ratio, 2), "x more zeros than expected)\n")
+  cat("• Better AIC fit\n")
+  cat("• Ecologically interpretable: answers both\n")
+  cat("    1) WHETHER roadkill occurs (zero-inflation process)\n")
+  cat("    2) HOW MANY animals are killed (count process)\n")
+  cat("• More appropriate for sparse count data\n")
+} else {
+  cat("Reasoning:\n")
+  cat("• Simpler model (principle of parsimony)\n")
+  cat("• Better AIC fit\n")
+  cat("• Easier to interpret and communicate\n")
+  cat("• Sufficient to answer primary question\n")
+}
+```
+
+---
+
+# PART 2: DAG & HYPOTHESES
+
+## 11. Create Directed Acyclic Graph (DAG)
+
+```{r dag, message=FALSE, warning=FALSE, fig.width=12, fig.height=8}
+library(dagitty)
+library(ggdag)
+
+# Define the COMPLETE DAG with all measured variables and causal relationships
+dag_roadkill <- dagitty("dag {
+  RoadType -> AADT
+  RoadType -> Roadkill
+  Speed -> AADT
+  Speed -> Roadkill
+  Habitat -> AADT
+  Habitat -> Roadkill
+  AADT -> Roadkill
+  Length -> Roadkill
+}")
+
+# Tidy for ggplot
+tidy_dag <- tidy_dagitty(dag_roadkill)
+
+# Plot with better styling
+ggplot(tidy_dag, aes(x = x, y = y, xend = xend, yend = yend)) +
+  geom_dag_edges(arrow_directed = arrow(length = unit(20, "pt"), type = "closed"),
+                 width = 1.5, edge_color = "gray30") +
+  geom_dag_node(size = 12, color = "steelblue", fill = "steelblue") +
+  geom_dag_text(aes(label = name), size = 5, fontface = "bold", color = "white") +
+  theme_dag() +
+  labs(title = "Complete Causal DAG: Roadkill Prediction Model",
+       subtitle = "All measured variables and their causal relationships")
+```
+
+**Complete DAG Explanation:**
+
+**Outcome (Response Variable):**
+- `Roadkill`: Count of animals killed on a road segment
+
+**Primary Exposure of Interest:**
+- `AADT` (Annual Average Daily Traffic): The main predictor we want to understand the causal effect of
+  - **Direct effect on Roadkill**: More traffic → more collisions
+  - **Influenced by**: Road type, speed limits, and habitat quality
+
+**Measured Confounders (Adjust in model):**
+- `Habitat` (% natural habitat within 500m buffer): 
+  - Affects AADT: Roads built through wildlife areas may have more traffic (main routes)
+  - Affects Roadkill: More habitat → more animals present
+  - **Must adjust** to isolate AADT effect
+  
+- `RoadType` (OSM road class):
+  - Affects AADT: Different road types carry different volumes
+  - Affects Roadkill directly: Highway vs local road design affects collision risk
+  - **Must adjust** for causal inference
+
+- `Speed` (speed limit):
+  - Affects AADT: Speed reflects road type/design which affects traffic flow
+  - Affects Roadkill directly: Higher speeds → worse collision outcomes
+  - **Must adjust** to estimate AADT effect properly
+
+**Exposure Opportunity:**
+- `Length` (road segment length):
+  - Affects Roadkill: Longer segments = more animals can collide
+  - **Use as offset** in model (adjust for road exposure)
+
+**Key Causal Pathways:**
+1. **Direct causal effect** (our main interest): AADT → Roadkill
+2. **Confounding paths** (must block by adjustment):
+   - RoadType → AADT → Roadkill
+   - RoadType → Roadkill
+   - Speed → AADT → Roadkill
+   - Speed → Roadkill
+   - Habitat → AADT → Roadkill
+   - Habitat → Roadkill
+
+---
+
+## 12. Explore Additional Context Data (Optional - Landuse & Places)
+
+```{r explore-context, warning=FALSE}
+# Load additional context data that could proxy for habitat
+landuse <- st_read(here("data", "OSM_dk_landuse_shp", "gis_osm_landuse_a_free_1.shp")) %>%
+  st_transform(CRS_M)
+
+places <- st_read(here("data", "OSM_dk_places_shp", "gis_osm_places_a_free_1.shp")) %>%
+  st_transform(CRS_M)
+
+cat("=== AVAILABLE LANDUSE TYPES ===\n")
+print(table(landuse$fclass))
+
+cat("\n=== AVAILABLE PLACE TYPES ===\n")
+print(table(places$fclass))
+
+cat("\nThese datasets could be used to create habitat/urbanization proxies by:")
+cat("\n1. Buffering road segments")
+cat("\n2. Calculating % forest/agriculture/urban within buffer")
+cat("\n3. Adding as covariates to model")
+```
+
+**Wildlife Habitat Proxy Creation:**
+
+We can create a habitat quality measure by:
+1. Buffering each road segment (e.g., 500m)
+2. Calculating proportion of buffer covered by natural habitat (forest, farmland, nature reserve, heath)
+3. Adding this as a measured confounder to the model
+
+This transforms the unmeasured "Habitat" confounder into a measured variable!
+
+## 12. Prepare Final Model Dataset
+
+```{r prepare-model-data-simple}
+cat("Preparing final model dataset...\n")
+
+# Start from the aggregated model_data that already has roadkill counts
+model_data_full <- model_data %>%
+  mutate(
+    # Simplify road class into habitat proxy
+    habitat_proxy = case_when(
+      code %in% c(5111, 5112, 5113, 5114, 5115) ~ "Major Roads",
+      code %in% c(5121, 5122, 5123) ~ "Minor Roads",
+      code %in% c(5131, 5132, 5133, 5134, 5135) ~ "Links/Ramps",
+      TRUE ~ "Other"
+    ),
+    # Create log-transformed predictors for modeling
+    log_AADT = log(AADT),
+    log_len_km = log(len_km + 0.01)
+  )
+
+cat("=== FINAL MODEL DATASET ===\n")
+cat("Total segments:", nrow(model_data_full), "\n")
+cat("Segments with roadkill:", sum(model_data_full$roadkill_count > 0), "\n")
+cat("Proportion with roadkill:", round(mean(model_data_full$roadkill_count > 0), 3), "\n")
+cat("Columns:", paste(names(model_data_full), collapse = ", "), "\n\n")
+
+cat("Road class distribution:\n")
+print(table(model_data_full$habitat_proxy))
+
+# Summary by road class
+cat("\n=== ROADKILL BY ROAD CLASS ===\n")
+model_data_full %>%
+  group_by(habitat_proxy) %>%
+  summarise(
+    mean_roadkill = round(mean(roadkill_count), 3),
+    median_roadkill = median(roadkill_count),
+    n_segments = n(),
+    pct_with_roadkill = round(100 * sum(roadkill_count > 0) / n(), 1),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_roadkill)) %>%
+  print()
+
+# Create more informative visualizations
+p1 <- model_data_full %>%
+  group_by(habitat_proxy) %>%
+  summarise(
+    mean_roadkill = mean(roadkill_count),
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = reorder(habitat_proxy, -mean_roadkill), y = mean_roadkill, fill = habitat_proxy)) +
+  geom_col(alpha = 0.7, color = "black") +
+  labs(title = "Average Roadkill by Road Type",
+       x = "Road Classification",
+       y = "Mean Roadkill Count per Segment") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"),
+        legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+p2 <- model_data_full %>%
+  group_by(habitat_proxy) %>%
+  summarise(
+    pct_with_roadkill = 100 * sum(roadkill_count > 0) / n(),
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = reorder(habitat_proxy, -pct_with_roadkill), y = pct_with_roadkill, fill = habitat_proxy)) +
+  geom_col(alpha = 0.7, color = "black") +
+  labs(title = "% of Segments with Any Roadkill",
+       x = "Road Classification",
+       y = "Percent of Segments") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"),
+        legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+p3 <- model_data_full %>%
+  ggplot(aes(x = habitat_proxy, fill = factor(roadkill_count > 0))) +
+  geom_bar(position = "fill", alpha = 0.7, color = "black") +
+  scale_fill_manual(values = c("FALSE" = "lightblue", "TRUE" = "coral"),
+                    labels = c("No Roadkill", "Roadkill")) +
+  labs(title = "Proportion of Segments with Roadkill",
+       x = "Road Classification",
+       y = "Proportion",
+       fill = "Status") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+(p1 + p2) / p3
+
+cat("\n✓ Model dataset ready for analysis!\n")
+```
+

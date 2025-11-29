@@ -1,0 +1,396 @@
+---
+title: "eds222-final-scratch"
+format: html
+---
+
+```{r}
+library(tidyverse)
+library(sf)
+library(here)
+```
+
+```{r}
+road_kill <- read_csv(here::here("data", "Global Roadkill data.csv"))
+```
+
+```{r}
+options(max.print = 100000)
+
+# Determine which country has the most road kill data
+top_countries <- road_kill %>%
+  group_by(country) %>% 
+  summarise("n_records" = sum(numberOfRoadkill))
+
+# Define good EPSG for Denmark
+CRS_M <- 25832
+
+# Filter road kill data to DK, keep only data with coordinates, convert coordinates to point geometry, convert to our chosen CRS
+road_kill_dk <- road_kill %>% 
+  filter(country == "Denmark") %>% 
+  drop_na(decimalLongitude, decimalLatitude) %>%
+  st_as_sf(coords = c("decimalLongitude","decimalLatitude"), crs = 4326) %>% 
+  st_transform(CRS_M)
+```
+
+```{r}
+# Load and transform crs of roads data
+roads_raw <- st_read(here("data","OSM_dk_roads_shp","gis_osm_roads_free_1.shp")) %>%
+  st_transform(CRS_M)
+```
+
+
+```{r}
+# Load and transform crs of traffic data
+traffic_raw <- st_read(here("data","ODN_dk_traffic_shp","OPEN_DATA_NOEGLETAL_VIEWPoint.shp")) %>%
+  st_transform(CRS_M)
+
+
+car_codes <- c(5111, 5112, 5113, 5114, 5115,  # Major roads
+               5121, 5122, 5123,              # Minor roads
+               5131, 5132, 5133, 5134, 5135,  # Links/ramps
+               5141)                          # Service - not necessary   
+
+# Filter roads using car_codes
+car_roads <- roads_raw %>% 
+  filter(code %in% car_codes) %>% 
+  transmute(osm_id,
+            fclass,
+            code,
+            maxspeed,
+            oneway,
+            bridge,
+            tunnel,
+            ref,
+            geometry) %>% 
+  mutate(len_m = st_length(geometry),
+         len_km = as.numeric(len_m) / 1000)
+```
+
+```{r}
+glimpse(traffic_raw)
+
+traffic_trim <- traffic_raw %>% 
+  select(AAR, AADT, geometry)
+```
+
+```{r}
+# Find nearest traffic point to each road segment
+#nearest_traffic_idx <- st_nearest_feature(car_roads, traffic_trim)
+
+#nearest_traffic_m <- as.numeric(
+#  st_distance(st_geometry(car_roads),
+#              st_geometry(traffic_trim)[nearest_traffic_idx],
+#              by_element = TRUE))
+
+#nearest_traffic_info <- traffic_trim[nearest_traffic_idx, ] %>% 
+#  st_drop_geometry() %>% 
+#  select(AAR, AADT)
+
+#roads_traf <- car_roads %>% 
+#  mutate(nearest_traffic_idx = nearest_traffic_idx,
+#         nearest_traffic_m = nearest_traffic_m) %>% 
+#  bind_cols(nearest_traffic_info) %>% 
+#  mutate(AADT = if_else(nearest_traffic_m <= 20, AADT, NA_real_))
+
+```
+
+```{r}
+#traffic20 <- st_buffer(traffic_trim, 20)
+
+#roads_traf20 <- st_join(car_roads, traffic20, join = st_intersects)
+
+#roads_traf20 <- roads_traf20 %>% 
+#  group_by(osm_id) %>% 
+#  summarise(AADT = mean(AADT, na.rm = TRUE)) %>% 
+#  ungroup() +
+#  right_join(st_drop_geometry(car_roads), by = #"osm_id") %>% 
+#  st_as_sf(st_column_name = attr(car_roads, #"sf_column"))
+```
+
+```{r}
+# Find nearest traffic point to each road segment and filter by distance
+idx <- st_nearest_feature(car_roads, traffic_trim)
+d <- st_distance(car_roads, traffic_trim[idx, ], by_element = TRUE)
+
+roads_traf20 <- car_roads %>% 
+  mutate(nn_dist_m = as.numeric(d)) %>%
+  bind_cols(traffic_trim[idx, ] %>% 
+              st_drop_geometry()) %>% 
+  mutate(AADT = if_else(nn_dist_m <= 20, AADT, NA_real_))
+
+# Check coverage of AADT data
+cat("Proportion of segments with AADT data (within 20m):", 
+    round(mean(!is.na(roads_traf20$AADT)), 3), "\n")
+cat("\nAADT Summary Statistics:\n")
+print(summary(roads_traf20$AADT))
+```
+
+
+```{r}
+# ============================================================================
+# EXPLORATORY ANALYSIS: COMPARING MODEL OPTIONS
+# ============================================================================
+
+# First, aggregate roadkill data by road segment
+roadkill_by_segment <- road_kill_dk %>%
+  st_join(roads_traf20, join = st_nearest_feature) %>%
+  group_by(osm_id) %>%
+  summarise(roadkill_count = n(), 
+            .groups = "drop") %>%
+  st_drop_geometry()
+
+# Create complete model dataset
+model_data <- roads_traf20 %>%
+  left_join(roadkill_by_segment, by = "osm_id") %>%
+  replace_na(list(roadkill_count = 0)) %>%
+  mutate(roadkill_per_km = roadkill_count / len_km) %>%
+  st_drop_geometry() %>%
+  select(osm_id, roadkill_count, roadkill_per_km, len_km, len_m, 
+         fclass, code, maxspeed, oneway, AADT, nn_dist_m) %>%
+  filter(AADT > 0)  # Remove segments without traffic data
+
+# Summary statistics
+cat("=== MODEL DATA SUMMARY ===\n")
+cat("Total road segments:", nrow(model_data), "\n")
+cat("Segments with roadkill:", sum(model_data$roadkill_count > 0), "\n")
+cat("Proportion with roadkill:", round(mean(model_data$roadkill_count > 0), 3), "\n\n")
+
+cat("=== ROADKILL COUNT DISTRIBUTION ===\n")
+print(summary(model_data$roadkill_count))
+cat("Variance:", var(model_data$roadkill_count), "\n")
+cat("Mean:", mean(model_data$roadkill_count), "\n")
+cat("Variance/Mean ratio (overdispersion):", 
+    round(var(model_data$roadkill_count) / mean(model_data$roadkill_count), 2), "\n\n")
+
+cat("=== ROADKILL PER KM DISTRIBUTION ===\n")
+print(summary(model_data$roadkill_per_km))
+cat("Variance:", var(model_data$roadkill_per_km), "\n")
+cat("Mean:", mean(model_data$roadkill_per_km), "\n\n")
+
+cat("=== AADT DISTRIBUTION ===\n")
+print(summary(model_data$AADT))
+```
+
+```{r}
+# ============================================================================
+# VISUALIZATION: ZERO INFLATION & DISTRIBUTION
+# ============================================================================
+
+# Plot 1: Distribution of roadkill counts
+p1 <- ggplot(model_data, aes(x = roadkill_count)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Roadkill Counts per Road Segment",
+       x = "Number of Roadkill Events",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"))
+
+# Plot 2: Proportion of zeros
+zero_prop <- mean(model_data$roadkill_count == 0)
+p2 <- tibble(category = c("No Roadkill", "Roadkill Observed"),
+             count = c(sum(model_data$roadkill_count == 0), 
+                      sum(model_data$roadkill_count > 0))) %>%
+  ggplot(aes(x = category, y = count, fill = category)) +
+  geom_col(color = "black", alpha = 0.7) +
+  geom_text(aes(label = paste0(count, "\n(", 
+                               round(count/nrow(model_data)*100, 1), "%)")),
+            vjust = -0.5, fontface = "bold") +
+  labs(title = "Zero Inflation in Roadkill Data",
+       x = "", y = "Number of Segments") +
+  scale_fill_manual(values = c("steelblue", "coral")) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold"))
+
+# Plot 3: Roadkill vs AADT
+p3 <- ggplot(model_data, aes(x = AADT, y = roadkill_count)) +
+  geom_point(alpha = 0.5, size = 2) +
+  scale_x_log10() +
+  geom_smooth(method = "loess", se = TRUE, color = "red") +
+  labs(title = "Roadkill vs Traffic Volume (AADT)",
+       x = "AADT (log scale)",
+       y = "Roadkill Count") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"))
+
+# Plot 4: Roadkill per km vs AADT
+p4 <- ggplot(model_data, aes(x = AADT, y = roadkill_per_km)) +
+  geom_point(alpha = 0.5, size = 2) +
+  scale_x_log10() +
+  geom_smooth(method = "loess", se = TRUE, color = "red") +
+  labs(title = "Roadkill Density vs Traffic Volume",
+       x = "AADT (log scale)",
+       y = "Roadkill per km") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"))
+
+# Combine plots
+library(patchwork)
+(p1 + p2) / (p3 + p4)
+```
+
+```{r}
+# ============================================================================
+# STATISTICAL TEST: OVERDISPERSION & ZERO-INFLATION
+# ============================================================================
+
+# Test for overdispersion (key for choosing negative binomial vs Poisson)
+library(AER)
+
+# Fit simple Poisson model to test for overdispersion
+poisson_test <- glm(roadkill_count ~ log(AADT) + len_km, 
+                    family = poisson(link = "log"), 
+                    data = model_data)
+
+# Overdispersion test
+dispersiontest(poisson_test)
+
+cat("\n=== ZERO-INFLATION ASSESSMENT ===\n")
+cat("Observed zeros:", sum(model_data$roadkill_count == 0), "\n")
+cat("Expected zeros under Poisson:", 
+    round(sum(dpois(0, fitted(poisson_test)))), "\n")
+cat("Ratio (Observed/Expected):", 
+    round(sum(model_data$roadkill_count == 0) / 
+            sum(dpois(0, fitted(poisson_test))), 2), "\n")
+
+# If ratio > 1.5-2, zero-inflation is likely present
+```
+
+```{r}
+# ============================================================================
+# MODEL COMPARISON: FIT BOTH MODELS TO REAL DATA
+# ============================================================================
+
+library(pscl)  # For hurdle models
+
+# Prepare data
+model_data_clean <- model_data %>%
+  filter(!is.na(AADT), !is.na(roadkill_count)) %>%
+  mutate(log_AADT = log(AADT),
+         log_len_km = log(len_km + 0.1))  # Add small constant to avoid log(0)
+
+# OPTION A: NEGATIVE BINOMIAL MODEL
+nb_model <- MASS::glm.nb(roadkill_count ~ log_AADT + log_len_km,
+                         data = model_data_clean,
+                         link = "log")
+
+cat("=== OPTION A: NEGATIVE BINOMIAL MODEL ===\n")
+print(summary(nb_model))
+cat("\nAIC:", AIC(nb_model), "\n")
+
+# OPTION B: HURDLE MODEL (Zero-inflation + Count process)
+hurdle_model <- hurdle(roadkill_count ~ log_AADT + log_len_km | log_AADT + log_len_km,
+                       data = model_data_clean,
+                       dist = "negbin",
+                       zero.dist = "binomial")
+
+cat("\n=== OPTION B: HURDLE MODEL ===\n")
+print(summary(hurdle_model))
+cat("\nAIC:", AIC(hurdle_model), "\n")
+
+# Model comparison
+cat("\n=== MODEL COMPARISON ===\n")
+cat("Negative Binomial AIC:", AIC(nb_model), "\n")
+cat("Hurdle Model AIC:", AIC(hurdle_model), "\n")
+cat("AIC Difference:", abs(AIC(nb_model) - AIC(hurdle_model)), "\n")
+cat("(Lower AIC is better; difference > 10 indicates strong preference)\n")
+```
+
+```{r}
+# ============================================================================
+# VISUALIZE MODEL FITS
+# ============================================================================
+
+# Get predictions from both models
+model_data_pred <- model_data_clean %>%
+  mutate(nb_pred = predict(nb_model, type = "response"),
+         hurdle_pred = predict(hurdle_model, type = "response"))
+
+# Plot: Observed vs Predicted
+p5 <- ggplot(model_data_pred, aes(x = roadkill_count)) +
+  geom_histogram(aes(fill = "Observed"), binwidth = 1, alpha = 0.6) +
+  geom_point(aes(y = nb_pred, color = "NB Predicted"), 
+             position = position_jitter(width = 0.2, height = 0), 
+             alpha = 0.5, size = 3) +
+  labs(title = "Negative Binomial: Observed vs Predicted",
+       x = "Roadkill Count",
+       y = "Frequency / Prediction") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"))
+
+p6 <- ggplot(model_data_pred, aes(x = roadkill_count)) +
+  geom_histogram(aes(fill = "Observed"), binwidth = 1, alpha = 0.6) +
+  geom_point(aes(y = hurdle_pred, color = "Hurdle Predicted"), 
+             position = position_jitter(width = 0.2, height = 0), 
+             alpha = 0.5, size = 3) +
+  labs(title = "Hurdle: Observed vs Predicted",
+       x = "Roadkill Count",
+       y = "Frequency / Prediction") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"))
+
+p5 + p6
+```
+
+```{r}
+# ============================================================================
+# RECOMMENDATION SUMMARY
+# ============================================================================
+
+cat("
+╔════════════════════════════════════════════════════════════════════════╗
+║                       MODEL RECOMMENDATION                             ║
+╚════════════════════════════════════════════════════════════════════════╝
+
+KEY FINDINGS FROM EXPLORATORY ANALYSIS:
+")
+
+zero_inflation_ratio <- sum(model_data_clean$roadkill_count == 0) / 
+                        sum(dpois(0, fitted(poisson_test)))
+
+if(zero_inflation_ratio > 1.5) {
+  cat("✓ STRONG zero-inflation detected (Ratio:", round(zero_inflation_ratio, 2), ")")
+  cat("\n✓ Hurdle model may better account for excess zeros")
+} else {
+  cat("✓ Moderate zero-inflation (Ratio:", round(zero_inflation_ratio, 2), ")")
+  cat("\n✓ Negative Binomial sufficient for most applications")
+}
+
+aic_diff <- abs(AIC(nb_model) - AIC(hurdle_model))
+if(AIC(hurdle_model) < AIC(nb_model)) {
+  winner <- "HURDLE MODEL"
+  cat("\n✓ Hurdle model has better AIC (difference:", round(aic_diff, 1), "points)")
+} else {
+  winner <- "NEGATIVE BINOMIAL"
+  cat("\n✓ Negative Binomial has better AIC (difference:", round(aic_diff, 1), "points)")
+}
+
+cat("\n
+RECOMMENDATION: ", winner, "\n")
+cat("
+Rationale:")
+if(winner == "HURDLE MODEL") {
+  cat("
+  • Excess zeros present in data (>50% segments with no roadkill)
+  • Separate processes: (1) whether roadkill occurs, (2) how many
+  • Better ecological interpretation: habitat suitability vs collision risk
+  • Research question aligns: 'What factors affect IF and HOW MANY'
+  • More complex, but justified by data structure
+  ")
+} else {
+  cat("
+  • Simpler model, easier to interpret and communicate
+  • Adequate fit for the data structure
+  • Negative binomial handles overdispersion well
+  • Research question sufficiently answered
+  • Follows principle of parsimony
+  ")
+}
+
+cat("\n")
+```
+
+
+
+
+
