@@ -49,4 +49,16 @@ po/*~
 rsconnect/
 
 # Ignore large data files
-data/*
+# Raw data (too large for git - store separately)
+data/raw/*
+
+# Processed/cached data (regenerated automatically by scripts)
+data/processed/*
+
+# Keep data folder structure
+!data/.gitkeep
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Keep documentation of data sources
+!data/README.md
