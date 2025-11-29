@@ -74,7 +74,7 @@ cat("Analysis period:", config$time_period, "\n")
 
 ## 3.1 Load Roadkill Data
 
-Roadkill observations are point data with coordinates. We filter to Denmark and the analysis time period (2017-2019) to match CORINE Land Cover 2018.
+Roadkill observations are point data with coordinates. We filter to Denmark and the analysis time period (2017-2019).
 
 ```{r}
 #| label: load-roadkill
@@ -757,7 +757,7 @@ This analysis demonstrates that traffic volume and road characteristics signific
 
 # References
 
-- CORINE Land Cover: Copernicus Land Monitoring Service
+- Land use data: OpenStreetMap land use polygons via Geofabrik
 - Road network: OpenStreetMap via Geofabrik
 - Traffic data: Vejdirektoratet (Danish Road Directorate)
 - Roadkill data: Global Roadkill Database
