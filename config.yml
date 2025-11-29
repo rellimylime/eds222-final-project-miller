@@ -34,15 +34,15 @@ road_car_codes_links: [5131, 5132, 5133, 5134, 5135] # ramps/connectors
 # Traffic Data
 traffic_shp_path: 'data/raw/ODN_dk_traffic_shp/OPEN_DATA_NOEGLETAL_VIEWPoint.shp' # from Vejdirektoratet (Danish Road Directorate)
 
-# Land Use
+# Land Use (OSM)
 landuse_shp_path: 'data/raw/OSM_dk_landuse_shp/gis_osm_landuse_a_free_1.shp' # from OpenStreetMap via Geofabrik
 
-# CORINE Land Cover (optional)
-corine_raster_path: 'data/raw/u2018_clc2018_v2020_20u1_raster100m/DATA/U2018_CLC2018_V2020_20u1.tif' # from Copernicus Land Monitoring Service 2018
-corine_urban_codes: [111, 142] # 1xx codes
-corine_agriculture_codes: [211, 244] # 2xx codes
-corine_forest_codes: [311, 324] # 3xx codes
-corine_wetland_water_codes: [411, 523] # 4xx-5xx codes
+# OSM Land Use Classification Codes (fclass field)
+landuse_forest_code: 7201  # Forest - wildlife habitat
+landuse_farmland_code: 7228  # Farmland - agricultural areas
+landuse_residential_code: 7203  # Residential - urban development
+landuse_park_code: 7202  # Park - protected areas
+landuse_nature_reserve_code: 7210  # Nature reserve - protected areas
 
 # ============================================================================
 # PROCESSED DATA (CACHED)
@@ -53,9 +53,6 @@ roads_cached_path: 'data/processed/roads_dk_epsg25832.rds' # Cached roads (cropp
 traffic_cached_path: 'data/processed/traffic_dk_epsg25832.rds' # Cached traffic points (cropped & reprojected)
 landuse_cached_path: 'data/processed/landuse_dk_epsg25832.rds' # Cached land use polygons (cropped & reprojected)
 
-# Cached CORINE (optional)
-corine_cached_path: 'data/processed/corine_dk_epsg25832.tif' # CORINE cropped and reprojected to Denmark
-
 # Distance Calculations
 distances_cache_path: 'data/processed/distances_cache_2017_2019.rds' # Road-to-traffic distances and nearest neighbor indices
 distance_threshold_percentile: 0.75 # Use 75th percentile for traffic matching
@@ -63,9 +60,9 @@ distance_threshold_percentile: 0.75 # Use 75th percentile for traffic matching
 # Spatial Joins & Aggregations
 roadkill_cache_path: 'data/processed/roadkill_by_segment_2017_2019.rds' # Roadkill counts aggregated by road segment
 
-# Land Cover Extraction (optional)
-landcover_props_path: 'data/processed/landcover_props_2017_2019.rds' # Land cover proportions within 500m road buffers
-road_buffer_distance: 500 # meters for land cover extraction
+# Land Use Extraction (OSM)
+landuse_props_path: 'data/processed/landuse_props_2017_2019.rds' # Land use proportions within 500m road buffers
+road_buffer_distance: 500 # meters for land use buffer around roads
 
 # ============================================================================
 # ANALYSIS PARAMETERS
@@ -83,8 +80,9 @@ model_predictors:
   - 'road_type'
   - 'speed_limit'
   - 'pct_forest'
-  - 'pct_agriculture'
-  - 'pct_urban'
+  - 'pct_farmland'
+  - 'pct_residential'
+  - 'pct_park'
 
 # ============================================================================
 # OUTPUT
@@ -111,7 +109,6 @@ model_predictors:
 
 # Citations:
 # - Roadkill: Global Roadkill Database
-# - Roads/Landuse: OpenStreetMap via Geofabrik
+# - Roads/Land Use: OpenStreetMap via Geofabrik
 # - Traffic: Vejdirektoratet (Danish Road Directorate)
-# - CORINE: Copernicus Land Monitoring Service
-# - Model: Zeileis et al. (2008) pscl package
+# - Model: Zeileis et al. (2008) pscl package for hurdle models
