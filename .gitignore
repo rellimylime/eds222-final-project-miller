@@ -47,3 +47,9 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Ignore large data files
+data/u2018_clc2018_v2020_20u1_raster100m/*
+data/distances_cache_2017_2019.rds
+data/distances_cache.rds
+data/roadkill_by_segment_cache.rds
