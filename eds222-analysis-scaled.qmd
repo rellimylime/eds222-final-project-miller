@@ -121,8 +121,17 @@ if (file.exists(traffic_cache)) {
 
   # Load shapefile
   traffic_raw <- st_read(here(config$traffic_shp_path), quiet = TRUE) %>%
-    st_transform(CRS_M) %>%
-    st_crop(dk_bbox_proj)
+  st_transform(CRS_M) %>%
+  st_crop(dk_bbox_proj) %>%
+  filter(AAR >= 2017, AAR <= 2019) %>%
+  # Average AADT across years for each station
+  group_by(geometry) %>%
+  summarise(
+    AADT = mean(AADT, na.rm = TRUE),
+    AAR = "2017-2019",
+    .groups = "drop"
+  ) %>%
+  st_as_sf()
 
   # Save to cache
   cat("Saving traffic to cache for future runs...\n")
@@ -291,12 +300,12 @@ if (file.exists(landuse_cache_file)) {
   cat("Loading cached land use proportions...\n")
   lu_props <- readRDS(landuse_cache_file)
 } else {
-  cat("Extracting land use via RASTER method (faster)...\n\n")
+  cat("Extracting land use via RASTER...\n\n")
   
   library(terra)
   
   # Step 1: Rasterize land use
-  cat("Step 1: Converting land use to raster (one-time, ~2-3 min)...\n")
+  cat("Step 1: Converting land use to raster (~2-3 min)...\n")
   
   # Get extent from roads
   roads_extent <- st_bbox(roads_traf) %>% st_as_sfc() %>% st_buffer(1000)
@@ -337,7 +346,7 @@ if (file.exists(landuse_cache_file)) {
     st_buffer(config$road_buffer_distance) %>%
     dplyr::select(road_id)
   
-  cat("  Extracting raster values (this takes 5-10 min)...\n")
+  cat("  Extracting raster values (this takes 2-5 min)...\n")
   
   # Extract all raster cells within each buffer
   extracted <- extract(landuse_raster, vect(road_buffers), fun = NULL)
