@@ -1,6 +1,6 @@
 # Wildlife-Vehicle Collisions in Denmark: A Hurdle Model Analysis
 
-**Author:** Em Miller  
+**Author:** Emily Miller  
 **Course:** EDS 222 - Statistics for Environmental Data Science  
 **Institution:** UC Santa Barbara Bren School of Environmental Science & Management  
 **Date:** December 2024
@@ -33,7 +33,7 @@ eds222-final-project-miller/
 │   ├── OSM_dk_roads_shp/                 # OpenStreetMap road network
 │   ├── OSM_dk_landuse_shp/               # OpenStreetMap land use polygons
 │   ├── ODN_dk_traffic_shp/               # Danish traffic monitoring points (MASTRA)
-│   └── processed/                        # Cached processed data
+│   └── processed/                        # Cached processed data (after running once)
 │       ├── roads_cached_2017_2019.rds
 │       ├── traffic_cached_2017_2019.rds
 │       ├── landuse_cached_2017_2019.rds
@@ -60,13 +60,9 @@ Citizen science and systematic survey data on wildlife-vehicle collisions worldw
 - `country`: Filter to Denmark
 - `year`: Temporal filtering (2017-2019)
 - `decimalLatitude`, `decimalLongitude`: Spatial coordinates
-- `scientificName`, `vernacularName`: Species taxonomy (future analysis)
 - `numberOfRoadkill`: Count per observation
 
 **License:** Creative Commons Attribution 4.0 International (CC BY 4.0)
-
-**Supplementary documentation:**  
-Teixeira, F.Z., Coelho, A.V.P., Esperandio, I.B., & Kindel, A. (2021). Vertebrate road mortality estimates: a compilation of roadkill studies from Brazil and other South American countries. *Ecology*, 102(7), e03355. https://doi.org/10.1002/ecy.3355
 
 ---
 
@@ -127,17 +123,6 @@ CQL Filter: `AAR=2018` (Year 2018)
 
 **License:** Creative Commons Attribution 4.0 (CC BY 4.0)  
 **Contact:** opendata@vd.dk
-
----
-
-### 4. CORINE Land Cover 2018
-
-**Note:** While CORINE Land Cover 2018 was initially considered for temporal alignment with roadkill data (2017-2019), the final analysis uses OpenStreetMap land use due to higher spatial resolution and computational efficiency. CORINE data is acknowledged here for context.
-
-**Citation (for reference):**  
-European Environment Agency. (2018). *CORINE Land Cover 2018* (Version 2020_20u1) [Raster dataset]. Copernicus Land Monitoring Service. https://land.copernicus.eu/pan-european/corine-land-cover/clc2018
-
-**License:** Copernicus data is free and open for all users
 
 ---
 
@@ -230,11 +215,11 @@ install.packages("quarto")
 
 ### Caching System
 
-This analysis implements aggressive caching to reduce computational time:
+This analysis implements caching to reduce computational time:
 
 - **Shapefiles cached** after first load (`.rds` format)
-- **Distance calculations cached** (road-to-traffic matching: ~5-10 min first run)
-- **Land use extraction cached** (rasterization + extraction: ~10-15 min first run)
+- **Distance calculations cached** (road-to-traffic matching: ~2-5 min first run)
+- **Land use extraction cached** (rasterization + extraction: ~5-10 min first run)
 - **Roadkill aggregation cached** (spatial join: ~2-5 min first run)
 
 **Cache location:** `data/processed/`
@@ -245,12 +230,12 @@ This analysis implements aggressive caching to reduce computational time:
 
 | Step | First Run | Cached |
 |------|-----------|--------|
-| Load shapefiles | 2-3 min | <5 sec |
-| Traffic matching | 5-10 min | <1 sec |
-| Land use extraction | 10-15 min | <1 sec |
-| Roadkill aggregation | 2-5 min | <1 sec |
+| Load shapefiles | <2 min | <5 sec |
+| Traffic matching | <5 min | <1 sec |
+| Land use extraction | <10 min | <1 sec |
+| Roadkill aggregation | <5 min | <1 sec |
 | Model fitting | 30 sec | 30 sec |
-| **Total** | **~20-30 min** | **~1 min** |
+| **Total** | **<25 min** | **~1 min** |
 
 ### Configuration
 
@@ -358,13 +343,6 @@ quarto render eds222-final-analysis.qmd
 3. **Evidence-based placement:** Model predictions can guide wildlife overpass/underpass locations
 4. **Landscape matters:** Land use context is MORE important than traffic volume for predicting collisions
 
-### Recommended Actions
-
-- Target top 5% of high-risk segments for wildlife fencing
-- Prioritize crossing structures where major roads bisect forest corridors
-- Consider speed reduction in high-collision zones
-- Monitor effectiveness with ongoing roadkill reporting
-
 ---
 
 ## Limitations & Future Work
@@ -403,17 +381,17 @@ quarto render eds222-final-analysis.qmd
 
 ## Contact
 
-**Em Miller**  
+**Emily Miller**  
 Master of Environmental Data Science  
 UC Santa Barbara Bren School  
-GitHub: [@your-github-username]  
-Email: your-email@ucsb.edu
+GitHub: [@rellimylime]  
+Email: ermiller@ucsb.edu
 
 ---
 
 ## Acknowledgments
 
-- **Dr. [Instructor Name]** - EDS 222 Statistics for Environmental Data Science
+- **Max Czapanskiy** - EDS 222 Statistics for Environmental Data Science
 - **Global Roadkill consortium** - Citizen science data collection
 - **OpenStreetMap contributors** - Open geographic data
 - **Vejdirektoratet** - Danish traffic monitoring data
@@ -423,15 +401,11 @@ Email: your-email@ucsb.edu
 
 ## References
 
-European Environment Agency. (2018). *CORINE Land Cover 2018* (Version 2020_20u1). Copernicus Land Monitoring Service. https://land.copernicus.eu/pan-european/corine-land-cover/clc2018
-
 Geofabrik GmbH. (2024). *Denmark OpenStreetMap Data* (Version 2024-10-26). https://download.geofabrik.de/europe/denmark.html
 
 Ramm, F. (2022). *OpenStreetMap Data in Layered GIS Format* (Version 12). Geofabrik GmbH.
 
 Teixeira, F.Z., Coelho, A.V.P., Esperandio, I.B., & Kindel, A. (2021). *Global roadkill data 2010–2020* (Version 1.0) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.5781390
-
-Teixeira, F.Z., Coelho, A.V.P., Esperandio, I.B., & Kindel, A. (2021). Vertebrate road mortality estimates: a compilation of roadkill studies from Brazil and other South American countries. *Ecology*, 102(7), e03355. https://doi.org/10.1002/ecy.3355
 
 Vejdirektoratet (Danish Road Directorate). (2018). *Traffic Counts – Key Figures*. https://www.opendata.dk/vejdirektoratet/taellinger-nogletal-mastra
 
